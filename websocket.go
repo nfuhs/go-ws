@@ -7,6 +7,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	MAX_MSG_SIZE = 5000
+)
+
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  2048,
 	WriteBufferSize: 2048,
@@ -25,7 +29,7 @@ type WebSocket struct {
 func NewWebSocket(w http.ResponseWriter, r *http.Request) (*WebSocket, error) {
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
-		log.Printf("An error occured while upgrading the connection: %v", err)
+		log.Printf("[ERROR | SOCKET CONNECT] %v", err)
 		return nil, err
 	}
 
@@ -44,6 +48,7 @@ func (ws *WebSocket) Reader() {
 	defer func() {
 		ws.Conn.Close()
 	}()
+	ws.Conn.SetReadLimit(MAX_MSG_SIZE)
 	for {
 		_, message, err := ws.Conn.ReadMessage()
 		if err != nil {
@@ -52,7 +57,7 @@ func (ws *WebSocket) Reader() {
 			}
 			break
 		}
-		event, err := NewEventFronRaw(message)
+		event, err := NewEventFromRaw(message)
 		if err != nil {
 			log.Printf("Error parsing message: %v", err)
 		} else {
@@ -62,4 +67,27 @@ func (ws *WebSocket) Reader() {
 			action(event)
 		}
 	}
+}
+
+func (ws *WebSocket) Writer() {
+	for {
+		select {
+		case message, ok := <-ws.Out:
+			if !ok {
+				ws.Conn.WriteMessage(websocket.CloseMessage, []byte{})
+				return
+			}
+			w, err := ws.Conn.NextWriter(websocket.TextMessage)
+			if err != nil {
+				return
+			}
+			w.Write(message)
+			w.Close()
+		}
+	}
+}
+
+func (ws *WebSocket) On(event string, action EventHandler) *WebSocket {
+	ws.Events[event] = action
+	return ws
 }
